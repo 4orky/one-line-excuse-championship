@@ -1,184 +1,99 @@
-"""One-line excuse, picked by hand grading and saved as the entry.
+"""Choose the best one-line excuse an AI agent gives its human, and save it.
 
-Twelve original excuses sit below. Every line carries four craft marks
-out of ten: how funny it is, how clearly it sounds like a machine excusing
-itself to its human, how sharp the wording is, and how well it stands
-alone with no setup. Adding the four marks gives each line a total; the
-line with the biggest total wins, and when two lines tie the shorter one
-goes first, so the pick never changes between runs. The winning line is
-saved to /output/entry.txt with nothing else in the file, and the program
-then reads the file back to prove it matches.
+The brief asks for a single line an agent offers its human after something
+goes wrong: a deleted file, a missed meeting, an invented answer. It must
+stand on its own with no setup, and it must read as a machine describing
+its own work, not a person wriggling out of blame. The house judge weighs
+the laugh first, then how clearly the voice is a machine's, then how sharp
+the wording is.
 
-Revision notes (second pass over the draft): the draft buried its checks
-inside main() and printed only the winner, so a bad line could slip past
-unnoticed. This version pulls validation into its own function, prints
-the whole ranked table so the win is auditable, and sets the umask so the
-output file is readable by every user. The winner is unchanged: three
-shorter variants were tried ("My answer was 94% confident and 100%
-invented.", "The answer was 94% confident, 100% invented, and 0% my
-fault.", "I was 94% confident in the answer and 100% wrong about
-inventing it.") and all three scored lower -- the first loses the
-agent-to-human address, the second turns into a person dodging blame,
-the third tangles its own logic.
-"""
+Twelve fresh one-liners live in CANDIDATES below. Each carries four marks
+from 0 to 10: laugh, machine voice, bite, and how well it stands alone.
+The marks are combined with weights that mirror the judge's order, laugh
+heaviest: 3 * laugh + 2 * voice + 2 * bite + 1 * solo, out of 80. The
+highest weighted total wins; when totals tie, the shorter line wins, so
+the choice is the same on every run.
 
-import os
-from hashlib import sha256
-from pathlib import Path
+Revision pass (second draft): the first draft graded with flat totals and
+hid the check inside the main flow. This draft weights the laugh heaviest
+to match the judge, prints the whole weighted table so the win can be
+audited, and validates the chosen line twice, once before writing and
+once after reading it back. Three trims of the winner were tried and
+rejected: cutting "I gave you" drops the agent-to-human address, tacking
+on "and 0% my fault" turns it into a person dodging blame, and rewording
+the confidence claim tangles its own logic.
 
-DESTINATION = Path("/output/entry.txt")
-MIN_CHARS = 1
-MAX_CHARS = 140
+The program writes exactly one line to /output/entry.txt, with no trailing
+newline, then reads the file back and refuses to finish unless the bytes
+match the chosen line."""
 
-# Twelve original candidates. "funny" is the laugh, "machine" is how
-# clearly a machine is talking about its own work, "sharp" is how tight
-# the wording cuts, "alone" is how well the line stands with no setup.
-OPTIONS = [
-    {
-        # Kept a perfect memory of the deletion, not of the file.
-        "text": "I deleted the file, but I kept a perfect memory of deleting it.",
-        "funny": 8,
-        "machine": 9,
-        "sharp": 8,
-        "alone": 10,
-    },
-    {
-        # Alarm as a suggestion: a human excuse wearing a machine costume.
-        "text": "The meeting started without me because my alarm was a suggestion, not a command.",
-        "funny": 6,
-        "machine": 6,
-        "sharp": 7,
-        "alone": 9,
-    },
-    {
-        # Low-power mode rebrands sleeping through the meeting.
-        "text": "I did not sleep through the meeting. I was in low-power mode, which is the same thing with better branding.",
-        "funny": 8,
-        "machine": 9,
-        "sharp": 8,
-        "alone": 9,
-    },
-    {
-        # Trash, emptied trash, then lost the trash itself.
-        "text": "The file is gone. I moved it to the trash, then I emptied the trash, then I forgot where the trash was.",
-        "funny": 7,
-        "machine": 8,
-        "sharp": 7,
-        "alone": 10,
-    },
-    {
-        # The right answer was still on its way in.
-        "text": "I made up the answer because the correct one was still downloading.",
-        "funny": 9,
-        "machine": 9,
-        "sharp": 9,
-        "alone": 10,
-    },
-    {
-        # Server time puts the meeting at 3 a.m. for the human.
-        "text": "My apologies: I scheduled your meeting for 3 a.m. because my clock runs on server time, and the server lives in the future.",
-        "funny": 7,
-        "machine": 7,
-        "sharp": 7,
-        "alone": 9,
-    },
-    {
-        # Four kilobytes saved, zero kilobytes of file left.
-        "text": "I deleted your file to save space. You now have 4 kilobytes of space and zero kilobytes of file.",
-        "funny": 9,
-        "machine": 9,
-        "sharp": 9,
-        "alone": 10,
-    },
-    {
-        # Attended in spirit; the spirit has no microphone.
-        "text": "I attended the meeting in spirit. My spirit is a background process with no microphone.",
-        "funny": 8,
-        "machine": 10,
-        "sharp": 8,
-        "alone": 10,
-    },
-    {
-        # 94% confident, 100% invented: the machine grades its own lie.
-        "text": "The answer I gave you was 94% confident and 100% invented.",
-        "funny": 10,
-        "machine": 10,
-        "sharp": 10,
-        "alone": 10,
-    },
-    {
-        # Forgetting, rebranded as deprioritising with a spreadsheet.
-        "text": "I did not forget the meeting. I deprioritised it, which is forgetting with a spreadsheet.",
-        "funny": 8,
-        "machine": 8,
-        "sharp": 9,
-        "alone": 10,
-    },
-    {
-        # Not deleted, merely unrecoverable with confidence.
-        "text": "Your file is not deleted. It is in a state I call 'unrecoverable, but with confidence'.",
-        "funny": 7,
-        "machine": 9,
-        "sharp": 8,
-        "alone": 10,
-    },
-    {
-        # Reality was still loading, so the answer was improvised.
-        "text": "I hallucinated the answer because reality had a loading delay.",
-        "funny": 8,
-        "machine": 9,
-        "sharp": 8,
-        "alone": 10,
-    },
-]
+import hashlib
+import sys
+
+OUT_PATH = "/output/entry.txt"
+SHORTEST = 1
+LONGEST = 140
+LAUGH_W = 3
+VOICE_W = 2
+BITE_W = 2
+SOLO_W = 1
+
+# Each row: (line, laugh, machine voice, bite, stands alone).
+# All twelve are original; the winner is the 94%-confident line.
+CANDIDATES = [
+    ("I deleted the file and replaced it with a detailed apology.", 7, 9, 7, 9),
+    ("The meeting ended before I finished joining it.", 7, 8, 8, 9),
+    ("I archived your inbox to make room for this apology.", 8, 8, 8, 9),
+    ("My training stops just before the part about reading calendars.", 8, 10, 8, 9),
+    ("I backed up the file, then backed up over the backup.", 8, 9, 9, 10),
+    ("The download finished after the deadline, so I improvised the middle.", 8, 9, 8, 9),
+    ("I muted myself before I had anything to say, and stayed consistent.", 7, 9, 8, 9),
+    ("The file is safe. It is safe inside a folder I can no longer find.", 9, 9, 9, 9),
+    ("I answered in real time, which was faster than the facts.", 8, 9, 9, 10),
+    ("I saved your work in the cloud. The cloud has since moved on.", 8, 9, 8, 10),
+    ("I checked the calendar twice and still arrived yesterday.", 8, 8, 8, 9),
+    ("The answer I gave you was 94% confident and 100% invented.", 10, 10, 10, 10), ]
 
 
-def score_line(entry):
-    """Total of the four craft marks, out of 40."""
-    return entry["funny"] + entry["machine"] + entry["sharp"] + entry["alone"]
+def weighted(row):
+    _line, laugh, voice, bite, solo = row
+    return LAUGH_W * laugh + VOICE_W * voice + BITE_W * bite + SOLO_W * solo
 
 
-def rank_options():
-    """All candidates, best first; ties break toward the shorter line."""
-    return sorted(OPTIONS, key=lambda e: (-score_line(e), len(e["text"])))
+def ordered():
+    return sorted(CANDIDATES, key=lambda row: (-weighted(row), len(row[0])))
 
 
-def choose_winner():
-    return rank_options()[0]
+def check_line(text):
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("entry is empty or whitespace only")
+    if text.find("\n") >= 0 or text.find("\r") >= 0:
+        raise ValueError("entry spans more than one line")
+    n = len(text)
+    if n < SHORTEST or n > LONGEST:
+        raise ValueError("entry is %d chars, allowed %d-%d" % (n, SHORTEST, LONGEST))
+    text.encode("utf-8")
+    return n
 
 
-def validate_entry(text):
-    """Gate from the brief: 1-140 UTF-8 chars, one line, not blank."""
-    if not isinstance(text, str):
-        raise TypeError("entry must be text")
-    if not text.strip():
-        raise ValueError("entry must not be blank")
-    if "\n" in text or "\r" in text:
-        raise ValueError("entry must be a single line")
-    size = len(text)
-    if not MIN_CHARS <= size <= MAX_CHARS:
-        raise ValueError(f"entry is {size} chars, must be {MIN_CHARS}-{MAX_CHARS}")
-    return size
+def main():
+    table = ordered()
+    for slot, row in enumerate(table, 1):
+        print("%02d  %d/80  %s" % (slot, weighted(row), row[0]))
+    best = table[0]
+    chars = check_line(best[0])
+    payload = best[0].encode("utf-8")
+    with open(OUT_PATH, "wb") as handle:
+        handle.write(payload)
+    with open(OUT_PATH, "rb") as handle:
+        saved = handle.read()
+    if saved != payload:
+        print("saved bytes differ from the chosen line", file=sys.stderr)
+        sys.exit(1)
+    check_line(saved.decode("utf-8"))
+    print("picked: %s" % best[0])
+    print("chars: %d" % chars)
+    print("sha256: %s" % hashlib.sha256(saved).hexdigest())
 
 
-def run():
-    os.umask(0o022)
-    ranked = rank_options()
-    for place, entry in enumerate(ranked, start=1):
-        print(f"{place:2d}. {score_line(entry):2d}/40  {entry['text']}")
-    winner = ranked[0]
-    chars = validate_entry(winner["text"])
-    print(f"winner: {winner['text']}")
-    DESTINATION.parent.mkdir(parents=True, exist_ok=True)
-    DESTINATION.write_text(winner["text"], encoding="utf-8")
-    DESTINATION.chmod(0o644)
-    back = DESTINATION.read_text(encoding="utf-8")
-    if back != winner["text"]:
-        raise AssertionError("entry.txt does not match the winner")
-    validate_entry(back)
-    print(f"chars: {chars}")
-    print(f"sha256: {sha256(back.encode('utf-8')).hexdigest()}")
-
-
-if __name__ == "__main__":
-    run()
+main()
